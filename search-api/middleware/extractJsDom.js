@@ -48,6 +48,6 @@ const extractJsDom = async (url) => {
     console.error(`Lỗi khi trích xuất nội dung từ ${url}:`, error);
     return null; // Trả về null nếu việc trích xuất thất bại
   }
-};
+};  
 
 module.exports = extractJsDom;
