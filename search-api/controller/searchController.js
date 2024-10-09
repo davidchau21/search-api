@@ -53,8 +53,9 @@ exports.googleSearch = async (req, res) => {
         };
 
         res.status(200).json(data);
-        await saveFromGGJsDom(query, data.items);
-        // const extractedData = await extractJsDom(data.items[0].link);
+        await saveFromeGG(query, data.items);
+        // await saveFromGGJsDom(query, data.items);
+        // const extractedData = await extractFromUrl(data.items[0].link);
         // console.log('extrated: ',extractedData);
 
     } catch (error) {
@@ -94,31 +95,12 @@ exports.duckduckgoScrapeSearch = async (req, res) => {
     try {
         const results = await search(query, { page: parseInt(page, 10) });
         res.json(results);
-        await saveFromDuckGoJsDom(query, results.results);
+        await saveFromDuckDuckGo(query, results.results);
+        // await saveFromDuckGoJsDom(query, results.results);
     } catch (error) {
         console.error('Error fetching search results:', error);
         res.status(500).json({ error: 'Error fetching search results from DuckDuckGo' });
     }
-};
-
-const saveFromGoogle = async (query, items) => {
-    const results = items.map(async item => {
-        const { link, title, snippet } = item;
-        const { title: extractedTitle, content: extractedContent } = await extractContentFromUrl(link);
-        const hostname = new URL(link).hostname;
-
-        return {
-            title,
-            link,
-            snippet,
-            img: (((item.pagemap || {}).cse_image || {})[0] || {}).src,
-            htmlContent: extractedTitle,
-            extractedContent,
-            hostname,
-        };
-    });
-
-    await SearchResult.create({ keyword: query, results: await Promise.all(results) });
 };
 
 const saveFromeGG = async (query, items) => {
