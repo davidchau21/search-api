@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { convert } = require('html-to-text');
 
 const extractContentFromUrl = async (url) => {
     try {
@@ -14,6 +15,14 @@ const extractContentFromUrl = async (url) => {
         console.warn(`No data extracted from ${url}`);
         return null; // Return null to signify extraction failure
       }
+
+      // Convert HTML content to plain text
+      extractedData.content = convert(extractedData.content, {
+        wordwrap: false,
+        ignoreHref: true,
+        ignoreImage: true,
+        singleNewLineParagraphs: true,
+      });
   
       // Destructure with defaults to avoid undefined errors
       return {

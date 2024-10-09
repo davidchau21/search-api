@@ -105,6 +105,13 @@ exports.duckduckgoScrapeSearch = async (req, res) => {
 
 const saveFromeGG = async (query, items) => {
     try {
+        // Kiểm tra xem từ khóa đã tồn tại trong database chưa
+        const existingResults = await SearchResult.findOne({ keyword: query });
+        if (existingResults) {
+            console.log(`Search results for query "${query}" already exist in the database.`);
+            return;
+        }
+
         const validItems = [];
 
         for (const item of items) {
@@ -227,6 +234,7 @@ exports.getSearchResults = async (req, res) => {
 
     try {
         const searchResults = await SearchResult.find({ keyword: query });
+        console.log('result: ',searchResults);
         res.json(searchResults);
     } catch (error) {
         console.error(error);
