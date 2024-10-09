@@ -218,5 +218,22 @@ const saveFromDuckGoJsDom = async (query, results) => {
         console.error(`Error saving extracted content for query "${query}":`, error);
     }
 }; 
+// get search results khi tìm kiếm
+exports.getSearchResults = async (req, res) => {
+    const { query } = req.query;
+    if (!query) {
+        return res.status(400).json({ error: 'Missing query parameter' });
+    }
+
+    try {
+        const searchResults = await SearchResult.find({ keyword: query });
+        res.json(searchResults);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error fetching search results' });
+    }
+}
+
+
   
 
