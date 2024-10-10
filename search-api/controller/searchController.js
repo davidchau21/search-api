@@ -93,7 +93,6 @@ searchQueue.process(async (job, done) => {
         };
 
         await saveFromeGG(query, data.items);
-
         console.log(`Search results for query "${query}" processed and saved.`);
         done();
     } catch (error) {
@@ -101,6 +100,22 @@ searchQueue.process(async (job, done) => {
         done(new Error(`Error processing search results for query "${query}"`));
     }
 });
+
+exports.getMultipleSearchResults = async (req, res) => {
+    const { queries } = req.body; // Expecting an array of queries in the request body
+    if (!queries || !Array.isArray(queries) || queries.length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid queries parameter' });
+    }
+
+    try {
+        const searchResults = await SearchResult.find({ keyword: { $in: queries } });
+        console.log('result: ', searchResults);
+        res.json(searchResults);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error fetching search results' });
+    }
+};
 
 const duckduckgoQueue = new Queue('duckduckgoQueue', {
     redis: {
