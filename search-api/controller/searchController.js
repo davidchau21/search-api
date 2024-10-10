@@ -2,22 +2,62 @@ const axios = require('axios');
 const { search } = require('duck-duck-scrape');
 const extractContentFromUrl = require('../middleware/contentExtractor');
 const SearchResult = require('../model/Search');
-const extractFromUrl = require('../middleware/extractJsDom.js');
 const extractJsDom = require('../middleware/extractJsDom.js');
+const Queue = require('bull');
 require('dotenv').config();
 
-// URL và API key cho Google Custom Search API
 const googleSearchUrl = process.env.GOOGLE_SEARCH_URL;
 const googleApiKey = process.env.GOOGLE_API_KEY;
 const googleCx = process.env.GOOGLE_CX;
 const duckduckgoSearchUrl = process.env.DUCKDUCKGO_SEARCH_URL;
 
-// Hàm tìm kiếm Google
-exports.googleSearch = async (req, res) => {
-    const { query, start = 1, num = 10 } = req.query;
+exports.duckduckgoSearch = async (req, res) => {
+    const { query } = req.query;
     if (!query) {
         return res.status(400).json({ error: 'Missing query parameter' });
     }
+
+    try {
+        const response = await axios.get(duckduckgoSearchUrl, {
+            params: {
+                q: query,
+                format: 'json',
+                no_redirect: '1',
+                no_html: '1',
+            },
+        });
+        res.json(response.data);
+    } catch (error) {
+        res.status(500).json({ error: 'Error fetching search results from DuckDuckGo' });
+    }
+};
+
+const searchQueue = new Queue('searchQueue', {
+    redis: {
+        host: '127.0.0.1',
+        port: 6379,
+    },
+});
+
+exports.googleSearch = async (req, res) => {
+    const { queries, start = 1, num = 10 } = req.body; // Expecting an array of queries in the request body
+    if (!queries || !Array.isArray(queries) || queries.length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid queries parameter' });
+    }
+
+    try {
+        for (const query of queries) {
+            await searchQueue.add({ query, start, num });
+        }
+        res.status(200).json({ message: 'Queries added to the queue' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error adding queries to the queue' });
+    }
+};
+
+searchQueue.process(async (job, done) => {
+    const { query, start, num } = job.data;
 
     try {
         const response = await axios.get(googleSearchUrl, {
@@ -52,56 +92,54 @@ exports.googleSearch = async (req, res) => {
             })),
         };
 
-        res.status(200).json(data);
         await saveFromeGG(query, data.items);
-        // await saveFromGGJsDom(query, data.items);
-        // const extractedData = await extractFromUrl(data.items[0].link);
-        // console.log('extrated: ',extractedData);
 
+        console.log(`Search results for query "${query}" processed and saved.`);
+        done();
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Error fetching search results from Google' });
+        console.error(`Error processing search results for query "${query}":`, error);
+        done(new Error(`Error processing search results for query "${query}"`));
     }
-};
+});
 
-exports.duckduckgoSearch = async (req, res) => {
-    const { query } = req.query;
-    if (!query) {
-        return res.status(400).json({ error: 'Missing query parameter' });
-    }
-
-    try {
-        const response = await axios.get(duckduckgoSearchUrl, {
-            params: {
-                q: query,
-                format: 'json',
-                no_redirect: '1',
-                no_html: '1',
-            },
-        });
-        res.json(response.data);
-    } catch (error) {
-        res.status(500).json({ error: 'Error fetching search results from DuckDuckGo' });
-    }
-};
+const duckduckgoQueue = new Queue('duckduckgoQueue', {
+    redis: {
+        host: '127.0.0.1',
+        port: 6379,
+    },
+});
 
 exports.duckduckgoScrapeSearch = async (req, res) => {
-    const { query, page = 1 } = req.query;
-
-    if (!query) {
-        return res.status(400).json({ error: 'Missing query parameter' });
+    const { queries } = req.body; // Expecting an array of queries in the request body
+    if (!queries || !Array.isArray(queries) || queries.length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid queries parameter' });
     }
 
     try {
-        const results = await search(query, { page: parseInt(page, 10) });
-        res.json(results);
-        await saveFromDuckDuckGo(query, results.results);
-        // await saveFromDuckGoJsDom(query, results.results);
+        for (const query of queries) {
+            await duckduckgoQueue.add({ query });
+        }
+        res.status(200).json({ message: 'Queries added to the queue' });
     } catch (error) {
-        console.error('Error fetching search results:', error);
-        res.status(500).json({ error: 'Error fetching search results from DuckDuckGo' });
+        console.error(error);
+        res.status(500).json({ error: 'Error adding queries to the queue' });
     }
 };
+
+duckduckgoQueue.process(async (job, done) => {
+    const { query } = job.data;
+
+    try {
+        const results = await search(query);
+        await saveFromDuckDuckGo(query, results.results);
+
+        console.log(`Search results for query "${query}" processed and saved.`);
+        done();
+    } catch (error) {
+        console.error(`Error processing search results for query "${query}":`, error);
+        done(new Error(`Error processing search results for query "${query}"`));
+    }
+});
 
 const saveFromeGG = async (query, items) => {
     try {
@@ -130,6 +168,7 @@ const saveFromeGG = async (query, items) => {
         if (validItems.length > 0) {
             const searchResult = new SearchResult({ keyword: query, results: validItems });
             await searchResult.save();
+
             console.log(`Saved search results for query: ${query}`);
         } else {
             console.log(`No valid results to save for query: ${query}`);
@@ -142,6 +181,13 @@ const saveFromeGG = async (query, items) => {
 
 const saveFromDuckDuckGo = async (query, results) => {
     try {
+
+        const existingResults = await SearchResult.findOne({ keyword: query });
+        if (existingResults) {
+            console.log(`Search results for query "${query}" already exist in the database.`);
+            return;
+        }
+
         const validItems = [];
 
         for (const item of results) {
@@ -224,8 +270,8 @@ const saveFromDuckGoJsDom = async (query, results) => {
     } catch (error) {
         console.error(`Error saving extracted content for query "${query}":`, error);
     }
-}; 
-// get search results khi tìm kiếm
+};
+
 exports.getSearchResults = async (req, res) => {
     const { query } = req.query;
     if (!query) {
@@ -234,14 +280,11 @@ exports.getSearchResults = async (req, res) => {
 
     try {
         const searchResults = await SearchResult.find({ keyword: query });
-        console.log('result: ',searchResults);
+        console.log('result: ', searchResults);
         res.json(searchResults);
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Error fetching search results' });
     }
 }
-
-
-  
 

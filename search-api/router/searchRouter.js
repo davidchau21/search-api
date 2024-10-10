@@ -8,4 +8,5 @@ router.get('/duckduckgo', searchController.duckduckgoSearch);
 router.get('/duckduckgo-scrape', searchController.duckduckgoScrapeSearch);
 router.get('/getResult', searchController.getSearchResults);
 
+
 module.exports = router;
