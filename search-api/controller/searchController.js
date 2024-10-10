@@ -49,7 +49,9 @@ exports.googleSearch = async (req, res) => {
         for (const query of queries) {
             await searchQueue.add({ query, start, num });
         }
-        res.status(200).json({ message: 'Queries added to the queue' });
+        searchQueue.on('completed', () => {
+            res.status(200).json({ message: 'Queries added to the queue and complete' });
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Error adding queries to the queue' });
@@ -92,8 +94,10 @@ searchQueue.process(async (job, done) => {
             })),
         };
 
-        await saveFromeGG(query, data.items);
-        console.log(`Search results for query "${query}" processed and saved.`);
+        const save = await saveFromeGG(query, data.items);
+        if(save) {
+            console.log(`Search results for query "${query}" processed and saved.`);
+        }
         done();
     } catch (error) {
         console.error(`Error processing search results for query "${query}":`, error);
@@ -146,9 +150,12 @@ duckduckgoQueue.process(async (job, done) => {
 
     try {
         const results = await search(query);
-        await saveFromDuckDuckGo(query, results.results);
+        const topResults = results.results.slice(0, 10); 
+        const save = await saveFromDuckDuckGo(query, topResults);
+        if (save) {
+            console.log(`Search results for query "${query}" processed and saved.`);
+        }
 
-        console.log(`Search results for query "${query}" processed and saved.`);
         done();
     } catch (error) {
         console.error(`Error processing search results for query "${query}":`, error);
