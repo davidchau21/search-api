@@ -40,21 +40,37 @@ const searchQueue = new Queue('searchQueue', {
 });
 
 exports.googleSearch = async (req, res) => {
-    const { queries, start = 1, num = 10 } = req.body; // Expecting an array of queries in the request body
+    const { queries, start = 1, num = 10 } = req.body; 
     if (!queries || !Array.isArray(queries) || queries.length === 0) {
         return res.status(400).json({ error: 'Missing or invalid queries parameter' });
     }
 
     try {
-        for (const query of queries) {
-            await searchQueue.add({ query, start, num });
-        }
-        searchQueue.on('completed', () => {
-            res.status(200).json({ message: 'Queries added to the queue and complete' });
+        // Kiểm tra xem từ khóa đã tồn tại trong cơ sở dữ liệu hay chưa
+        const jobPromises = queries.map(async (query) => {
+            const existingResults = await SearchResult.findOne({ keyword: query });
+            if (!existingResults) {
+                // Thêm query vào hàng đợi nếu chưa có trong CSDL
+                return searchQueue.add({ query, start, num });
+            } else {
+                console.log(`Search results for query "${query}" already exist in the database.`);
+                return null; // Bỏ qua những từ khóa đã tồn tại
+            }
         });
+
+        // Chờ cho đến khi tất cả các công việc đã được thêm vào hàng đợi
+        const jobs = await Promise.all(jobPromises);
+
+        // Đợi tất cả các công việc trong hàng đợi hoàn tất
+        const completedJobs = jobs.filter(job => job !== null).map(job => job.finished());
+
+        await Promise.all(completedJobs);
+
+        // Khi tất cả công việc đã hoàn tất hoặc dữ liệu đã có sẵn trong CSDL
+        res.status(200).json({ message: 'Queries processed and saved successfully' });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Error adding queries to the queue' });
+        res.status(500).json({ error: 'Error processing queries' });
     }
 };
 
@@ -94,10 +110,7 @@ searchQueue.process(async (job, done) => {
             })),
         };
 
-        const save = await saveFromeGG(query, data.items);
-        if(save) {
-            console.log(`Search results for query "${query}" processed and saved.`);
-        }
+        await saveFromeGG(query, data.items);
         done();
     } catch (error) {
         console.error(`Error processing search results for query "${query}":`, error);
@@ -105,21 +118,7 @@ searchQueue.process(async (job, done) => {
     }
 });
 
-exports.getMultipleSearchResults = async (req, res) => {
-    const { queries } = req.body; // Expecting an array of queries in the request body
-    if (!queries || !Array.isArray(queries) || queries.length === 0) {
-        return res.status(400).json({ error: 'Missing or invalid queries parameter' });
-    }
 
-    try {
-        const searchResults = await SearchResult.find({ keyword: { $in: queries } });
-        console.log('result: ', searchResults);
-        res.json(searchResults);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Error fetching search results' });
-    }
-};
 
 const duckduckgoQueue = new Queue('duckduckgoQueue', {
     redis: {
@@ -165,13 +164,6 @@ duckduckgoQueue.process(async (job, done) => {
 
 const saveFromeGG = async (query, items) => {
     try {
-        // Kiểm tra xem từ khóa đã tồn tại trong database chưa
-        const existingResults = await SearchResult.findOne({ keyword: query });
-        if (existingResults) {
-            console.log(`Search results for query "${query}" already exist in the database.`);
-            return;
-        }
-
         const validItems = [];
 
         for (const item of items) {
@@ -309,4 +301,20 @@ exports.getSearchResults = async (req, res) => {
         res.status(500).json({ error: 'Error fetching search results' });
     }
 }
+
+exports.getMultipleSearchResults = async (req, res) => {
+    const { queries } = req.body; // Expecting an array of queries in the request body
+    if (!queries || !Array.isArray(queries) || queries.length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid queries parameter' });
+    }
+
+    try {
+        const searchResults = await SearchResult.find({ keyword: { $in: queries } });
+        console.log('result: ', searchResults);
+        res.json(searchResults);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error fetching search results' });
+    }
+};
 
