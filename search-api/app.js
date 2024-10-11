@@ -10,10 +10,8 @@ const port = 3001;
 app.use(express.json());
 app.use(cors());
 
-// Sử dụng router cho các route tìm kiếm
 app.use('/search', searchRouter);
 
-// Kết nối MongoDB
 mongoose.connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,

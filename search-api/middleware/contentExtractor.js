@@ -1,6 +1,14 @@
 const axios = require('axios');
+const NodeCache = require('node-cache');
+const cache = new NodeCache({ stdTTL: 3600 }); // Cache for 1 hour
 
 const extractContentFromUrl = async (url) => {
+  // Check cache first
+  const cachedData = cache.get(url);
+  if (cachedData) {
+    return cachedData;
+  }
+
   try {
     const response = await axios.get(url);
 
@@ -23,7 +31,7 @@ const extractContentFromUrl = async (url) => {
     }
 
     // Destructure with defaults to avoid undefined errors
-    return {
+    const result = {
       title: extractedData.title || 'No title',
       content: extractedData.content || 'No content', // Content without any HTML tags
       image: extractedData.image || null,
@@ -37,10 +45,15 @@ const extractContentFromUrl = async (url) => {
       links: extractedData.links || [],
       ttr: extractedData.ttr || 0,
     };
+
+    // Cache the result
+    cache.set(url, result);
+
+    return result;
   } catch (error) {
-    console.error(`Error extracting content from ${url}:`, error);
+    console.error(`Error extracting content from ${url}: `, error);
     return null; // Return null if extraction fails
   }
 };
 
-module.exports = extractContentFromUrl;
+module.exports = extractContentFromUrl; 

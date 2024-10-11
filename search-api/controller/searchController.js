@@ -32,13 +32,6 @@ exports.duckduckgoSearch = async (req, res) => {
     }
 };
 
-const searchQueue = new Queue('searchQueue', {
-    redis: {
-        host: '127.0.0.1',
-        port: 6379,
-    },
-});
-
 exports.googleSearch = async (req, res) => {
     const { queries, start = 1, num = 10 } = req.body; 
     if (!queries || !Array.isArray(queries) || queries.length === 0) {
@@ -46,86 +39,55 @@ exports.googleSearch = async (req, res) => {
     }
 
     try {
-        // Kiểm tra xem từ khóa đã tồn tại trong cơ sở dữ liệu hay chưa
         const jobPromises = queries.map(async (query) => {
             const existingResults = await SearchResult.findOne({ keyword: query });
             if (!existingResults) {
-                // Thêm query vào hàng đợi nếu chưa có trong CSDL
-                return searchQueue.add({ query, start, num });
+                const response = await axios.get(googleSearchUrl, {
+                    params: {
+                        key: googleApiKey,
+                        cx: googleCx,
+                        q: query,
+                        start,
+                        num,
+                    },
+                });
+
+                const { queries, items, searchInformation } = response.data;
+
+                const page = (queries.request || [])[0] || {};
+                const previousPage = (queries.previousPage || [])[0] || {};
+                const nextPage = (queries.nextPage || [])[0] || {};
+
+                const data = {
+                    q: query,
+                    totalResults: page.totalResults,
+                    count: page.count,
+                    startIndex: page.startIndex,
+                    nextPage: nextPage.startIndex,
+                    previousPage: previousPage.startIndex,
+                    time: searchInformation.searchTime,
+                    items: items.map(o => ({
+                        link: o.link,
+                        title: o.title,
+                        snippet: o.snippet,
+                        img: (((o.pagemap || {}).cse_image || {})[0] || {}).src,
+                    })),
+                };
+
+                await saveFromeGG(query, data.items);
             } else {
                 console.log(`Search results for query "${query}" already exist in the database.`);
-                return null; // Bỏ qua những từ khóa đã tồn tại
             }
         });
 
-        // Chờ cho đến khi tất cả các công việc đã được thêm vào hàng đợi
-        const jobs = await Promise.all(jobPromises);
+        await Promise.all(jobPromises);
 
-        // Đợi tất cả các công việc trong hàng đợi hoàn tất
-        const completedJobs = jobs.filter(job => job !== null).map(job => job.finished());
-
-        await Promise.all(completedJobs);
-
-        // Khi tất cả công việc đã hoàn tất hoặc dữ liệu đã có sẵn trong CSDL
         res.status(200).json({ message: 'Queries processed and saved successfully' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Error processing queries' });
     }
 };
-
-searchQueue.process(async (job, done) => {
-    const { query, start, num } = job.data;
-
-    try {
-        const response = await axios.get(googleSearchUrl, {
-            params: {
-                key: googleApiKey,
-                cx: googleCx,
-                q: query,
-                start,
-                num,
-            },
-        });
-
-        const { queries, items, searchInformation } = response.data;
-
-        const page = (queries.request || [])[0] || {};
-        const previousPage = (queries.previousPage || [])[0] || {};
-        const nextPage = (queries.nextPage || [])[0] || {};
-
-        const data = {
-            q: query,
-            totalResults: page.totalResults,
-            count: page.count,
-            startIndex: page.startIndex,
-            nextPage: nextPage.startIndex,
-            previousPage: previousPage.startIndex,
-            time: searchInformation.searchTime,
-            items: items.map(o => ({
-                link: o.link,
-                title: o.title,
-                snippet: o.snippet,
-                img: (((o.pagemap || {}).cse_image || {})[0] || {}).src,
-            })),
-        };
-
-        await saveFromeGG(query, data.items);
-        done();
-    } catch (error) {
-        console.error(`Error processing search results for query "${query}":`, error);
-        done(new Error(`Error processing search results for query "${query}"`));
-    }
-});
-
-
-
-const duckduckgoQueue = new Queue('duckduckgoQueue', {
-    redis: {
-        host: '127.0.0.1',
-        port: 6379,
-    },
-});
 
 exports.duckduckgoScrapeSearch = async (req, res) => {
     const { queries } = req.body; // Expecting an array of queries in the request body
@@ -134,33 +96,27 @@ exports.duckduckgoScrapeSearch = async (req, res) => {
     }
 
     try {
-        for (const query of queries) {
-            await duckduckgoQueue.add({ query });
-        }
-        res.status(200).json({ message: 'Queries added to the queue' });
+        const jobPromises = queries.map(async (query) => {
+            const existingResults = await SearchResult.findOne({ keyword: query });
+            if (!existingResults) {
+                const results = await search(query);
+                const topResults = results.results.slice(0, 10);
+                await saveFromDuckDuckGo(query, topResults);
+            } else {
+                console.log(`Search results for query "${query}" already exist in the database.`);
+            }
+        });
+
+        // Wait for all jobs to complete
+        await Promise.all(jobPromises);
+
+        // When all jobs are completed or data already exists in the database
+        res.status(200).json({ message: 'Queries processed and saved successfully' });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Error adding queries to the queue' });
+        res.status(500).json({ error: 'Error processing queries' });
     }
 };
-
-duckduckgoQueue.process(async (job, done) => {
-    const { query } = job.data;
-
-    try {
-        const results = await search(query);
-        const topResults = results.results.slice(0, 10); 
-        const save = await saveFromDuckDuckGo(query, topResults);
-        if (save) {
-            console.log(`Search results for query "${query}" processed and saved.`);
-        }
-
-        done();
-    } catch (error) {
-        console.error(`Error processing search results for query "${query}":`, error);
-        done(new Error(`Error processing search results for query "${query}"`));
-    }
-});
 
 const saveFromeGG = async (query, items) => {
     try {
@@ -196,11 +152,11 @@ const saveFromeGG = async (query, items) => {
 const saveFromDuckDuckGo = async (query, results) => {
     try {
 
-        const existingResults = await SearchResult.findOne({ keyword: query });
-        if (existingResults) {
-            console.log(`Search results for query "${query}" already exist in the database.`);
-            return;
-        }
+        // const existingResults = await SearchResult.findOne({ keyword: query });
+        // if (existingResults) {
+        //     console.log(`Search results for query "${query}" already exist in the database.`);
+        //     return;
+        // }
 
         const validItems = [];
 
@@ -263,18 +219,18 @@ const saveFromDuckGoJsDom = async (query, results) => {
         const extractedItems = await Promise.all(results.map(async (item) => {
             try {
                 const extractedContent = await extractJsDom(item.url);
-                return extractedContent; // Trả về nội dung đã trích xuất
+                return extractedContent; 
             } catch (error) {
                 console.error(`Error accessing or extracting content from ${item.url}:`, error);
-                return null; // Trả về null nếu không truy xuất được
+                return null; 
             }
         }));
 
-        // Lọc bỏ các mục null (các trang không truy cập được)
+        
         const validItems = extractedItems.filter(item => item !== null);
 
         if (validItems.length > 0) {
-            // Giả sử bạn có một model SearchResult để lưu kết quả
+           
             const searchResult = new SearchResult({ keyword: query, results: validItems });
             await searchResult.save();
             console.log(`Saved search results for query: ${query}`);
@@ -303,13 +259,25 @@ exports.getSearchResults = async (req, res) => {
 }
 
 exports.getMultipleSearchResults = async (req, res) => {
-    const { queries } = req.body; // Expecting an array of queries in the request body
+    const { queries } = req.body; 
     if (!queries || !Array.isArray(queries) || queries.length === 0) {
         return res.status(400).json({ error: 'Missing or invalid queries parameter' });
     }
 
     try {
-        const searchResults = await SearchResult.find({ keyword: { $in: queries } });
+        const searchResults = [];
+
+        const jobPromises = queries.map(async (query) => {
+            try {
+                const result = await SearchResult.find({ keyword: query });
+                searchResults.push(result);
+            } catch (err) {
+                console.error(`Error processing query "${query}":`, err);
+            }
+        });
+
+        await Promise.all(jobPromises);
+
         console.log('result: ', searchResults);
         res.json(searchResults);
     } catch (error) {
@@ -317,4 +285,51 @@ exports.getMultipleSearchResults = async (req, res) => {
         res.status(500).json({ error: 'Error fetching search results' });
     }
 };
+
+exports.searchVideo = async (req, res) => {
+    const { query } = req.query;
+    if (!query) {
+        return res.status(400).json({ error: 'Missing query parameter' });
+    }
+
+    try {
+        const response = await axios.get('https://www.googleapis.com/youtube/v3/search', {
+            params: {
+                key: process.env.GOOGLE_API_KEY,
+                part: 'snippet',
+                q: query,
+                maxResults: 10,
+                type: 'video',
+            },
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error fetching video search results' });
+    }
+};
+
+exports.searchImage = async (req, res) => {
+    const { query } = req.query;
+    if (!query) {
+        return res.status(400).json({ error: 'Missing query parameter' });
+    }
+
+    try {
+        const response = await axios.get(googleSearchUrl, {
+            params: {
+                key: process.env.GOOGLE_API_KEY,
+                cx: process.env.GOOGLE_CX,
+                q: query,
+                searchType: 'image',
+            },
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error fetching image search results' });
+    }
+}
 

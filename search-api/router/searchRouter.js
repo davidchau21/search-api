@@ -8,6 +8,8 @@ router.get('/duckduckgo', searchController.duckduckgoSearch);
 router.get('/duckduckgo-scrape', searchController.duckduckgoScrapeSearch);
 router.get('/getResult', searchController.getSearchResults);
 router.get('/get-search-result', searchController.getMultipleSearchResults);
+router.get('/search-video', searchController.searchVideo);
+router.get('/search-image', searchController.searchImage);
 
 
 module.exports = router;
