@@ -265,21 +265,9 @@ exports.getMultipleSearchResults = async (req, res) => {
     }
 
     try {
-        const searchResults = [];
-
-        const jobPromises = queries.map(async (query) => {
-            try {
-                const result = await SearchResult.find({ keyword: query });
-                searchResults.push(result);
-            } catch (err) {
-                console.error(`Error processing query "${query}":`, err);
-            }
-        });
-
-        await Promise.all(jobPromises);
-
-        console.log('result: ', searchResults);
+        const searchResults = await SearchResult.find({ keyword: { $in: queries } });
         res.json(searchResults);
+        // console.log('result: ', searchResults);
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Error fetching search results' });
